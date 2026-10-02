@@ -1,0 +1,19 @@
+# MINI max client configuration (read at every start).
+
+[server]
+host = "127.0.0.1"          # server address — never hardcoded in the client
+port = 7443
+
+[tls]
+enabled = false
+verify_peer = true          # set false only for self-signed test servers
+ca_file = ""                # optional extra CA bundle (PEM)
+
+[network]
+keepalive_seconds = 20      # PING interval
+reconnect_min_ms = 500      # reconnect backoff: first delay
+reconnect_max_ms = 15000    # reconnect backoff: upper bound
+
+[ui]
+theme = "dark"              # dark | light | system
+cache_dir = "~/.cache/minimax"

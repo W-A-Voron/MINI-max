@@ -1,0 +1,129 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux (Ubuntu 24.04, Qt 6)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git python3 \
+            qt6-base-dev libqt6svg6-dev libgl1-mesa-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package
+        run: |
+          mkdir -p dist/minimax/configs
+          cp build/server/minimax-server build/client/minimax-client dist/minimax/
+          cp configs/*.toml dist/minimax/configs/
+          cp -r server/migrations dist/minimax/migrations
+          tar -C dist -czf minimax-linux-x86_64.tar.gz minimax
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minimax-linux-x86_64
+          path: minimax-linux-x86_64.tar.gz
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: minimax-linux-x86_64.tar.gz
+
+  windows:
+    name: Windows (MSYS2 UCRT64, Qt 6)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-svg
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package
+        run: |
+          mkdir -p dist/minimax/configs
+          cp build/server/minimax-server.exe build/client/minimax-client.exe dist/minimax/
+          cp configs/*.toml dist/minimax/configs/
+          cp scripts/windows/*.bat dist/minimax/
+          cp -r server/migrations dist/minimax/migrations
+          cd dist/minimax
+          (windeployqt6 --no-translations minimax-client.exe || windeployqt-qt6 --no-translations minimax-client.exe)
+          # safety net: copy any remaining MSYS2 runtime DLLs the executables link against
+          for exe in *.exe; do
+            ldd "$exe" | awk '/ucrt64/ {print $3}' | while read -r dll; do cp -n "$dll" . ; done
+          done
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist\minimax -DestinationPath minimax-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minimax-windows-x64
+          path: minimax-windows-x64.zip
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: minimax-windows-x64.zip
+
+  sanitizers:
+    name: Server + protocol under ASan/UBSan (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build git python3
+      - name: Build and test
+        run: |
+          cmake -S . -B build -G Ninja -DMINIMAX_BUILD_CLIENT=OFF -DMINIMAX_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build -j"$(nproc)"
+          ctest --test-dir build --output-on-failure
